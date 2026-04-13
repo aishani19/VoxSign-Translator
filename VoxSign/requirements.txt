@@ -1,0 +1,9 @@
+gradio==5.25.2
+fastapi==0.115.2
+language-tool-python==2.9.4
+mediapipe==0.10.14
+numpy==1.26.4
+protobuf<5,>=4.25.3
+tensorflow==2.16.1
+python-multipart==0.0.12
+uvicorn==0.30.6

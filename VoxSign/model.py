@@ -10,12 +10,14 @@ from sklearn import metrics
 
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
+from action_config import load_actions
 
 # Set the path to the data directory
 PATH = os.path.join('data')
 
-# Create an array of actions (signs) labels by listing the contents of the data directory
-actions = np.array(os.listdir(PATH))
+# Use configured actions if available and present in data/.
+configured_actions = [a for a in load_actions(default="a,b") if os.path.isdir(os.path.join(PATH, a))]
+actions = np.array(configured_actions if configured_actions else sorted(os.listdir(PATH)))
 
 # Define the number of sequences and frames
 sequences = 30
@@ -56,7 +58,7 @@ model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categ
 model.fit(X_train, Y_train, epochs=100)
 
 # Save the trained model
-model.save('my_model')
+model.save('my_model.keras')
 
 # Make predictions on the test set
 predictions = np.argmax(model.predict(X_test), axis=1)

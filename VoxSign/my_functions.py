@@ -29,16 +29,11 @@ def image_process(image, model):
     Returns:
         results: The processed results containing sign landmarks.
     """
-    # Set the image to read-only mode
-    image.flags.writeable = False
-    # Convert the image from BGR to RGB
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # Use a temporary RGB frame for MediaPipe so the original image remains writable.
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    rgb_image.flags.writeable = False
     # Process the image using the model
-    results = model.process(image)
-    # Set the image back to writeable mode
-    image.flags.writeable = True
-    # Convert the image back from RGB to BGR
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    results = model.process(rgb_image)
     return results
 
 def keypoint_extraction(results):

@@ -1,50 +1,148 @@
-# Sign-Language-Translator
+# VoxSign Translator
 
-This project is aimed at developing a Neural Network using LSTM and Dense layers to translate any sign language into text. It provides a user-friendly way for individuals to train their own Neural Network model and enables real-time predictions as well as grammar correction of predicted sentences. 
+VoxSign is an intelligent sign language translation project that converts hand gestures into text in real time using computer vision and deep learning. It is built as an end-to-end pipeline with a React frontend and FastAPI backend, designed for accessibility-focused communication workflows.
 
-### Key Features:
-* User-friendly data collection process for creating custom sign language datasets.
-* Training of a Neural Network model using LSTM and Dense layers.
-* Real-time predictions of hand gestures based on hand landmarks.
-* Integration of language_tool_python library to perform grammar correction.
-* Incorporation of MediaPipe Holistic pipeline for accurate hand tracking.
+## Project Vision
 
-<p align="center"> <img src="img/1_1.gif" alt="drawing" width="450"/> </p>
+- Build an intelligent sign language translation system for accessibility.
+- Apply NLP-style post-processing (sentence cleanup/grammar stage) with vision-based sign recognition.
+- Implement an end-to-end pipeline combining language processing and computer vision models for real-time translation.
+- Keep the system deployable and usable on different computers with a modern web stack.
 
+## Core Features
 
-## Description
+- User-friendly data collection for custom sign datasets.
+- LSTM + Dense neural architecture for gesture sequence classification.
+- Real-time webcam inference with live prediction smoothing.
+- MediaPipe Holistic-based landmark extraction for robust hand tracking.
+- Sentence building with optional grammar correction stage.
+- React frontend + FastAPI backend for deployable web usage.
 
-This project provides an opportunity for people to train their own Neural Network by recording their own dataset of hand gestures in an intuitive and simple manner.
-The whole project can be split into three main parts:
-1. Data collection.
-2. Model training.
-3. Real time predictions.
+## End-to-End Pipeline
 
-## Data Collection
+1. **Data Collection** (`data_collection.py`)
+   - Record gesture sequences from webcam.
+   - Extract hand landmarks (126 features per frame: 21 points x 2 hands x xyz).
+   - Store training samples under `data/<label>/<sequence>/<frame>.npy`.
 
-In order for a user to collect data and create their own dataset, the [data_collection.py](https://github.com/dgovor/Sign-Language-Translator/blob/main/data_collection.py) is used. The script is organized in a way that it would be easy to configure your own preferences and options, such as the signs the user would like to add to their dataset, the number of sequences for each sign, the number of frames for each sequence, and the path where the user would like to store the dataset. Once these parameters were set and the script is running, the user can start recording the data. <ins>It is recommended that the user records a substantial number of sequences changing the position of their hands. This way the user can ensure data diversity which helps to obtain a generalized model.</ins>
+2. **Model Training** (`model.py`)
+   - Load all labeled landmark sequences.
+   - Train a Sequential LSTM + Dense model.
+   - Save trained model to `my_model.keras`.
 
-<p align="center"> <img src="img/1_2.gif" alt="drawing" width="450"/> </p>
+3. **Real-Time Prediction** (`backend_api.py` + `frontend/`)
+   - Capture live webcam frames from React.
+   - Send frames to FastAPI prediction endpoint.
+   - Run MediaPipe + model inference and return:
+     - predicted label
+     - confidence
+     - visualization frame
+     - sentence output
 
-[MediaPipe Holistic](https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/holistic.md) pipeline was used to record the data from the user's hands. Using [MediaPipe Holistic](https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/holistic.md) instead of [MediaPipe Hands](https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/hands.md) opens doors to future extensions and possibilities of this script. The pipeline processes each frame sent through it and results in the pose, face, left hand, and right hand components neatly stored in a variable. Each of the components can be represented by landmarks (these components' coordinates). In this case, only the hands' components' landmarks are being extracted resulting in overall 126 data entries (21 landmarks per hand with _x_, _y_, _z_ coordinates per landmark).
+## Model and CV Details
 
-## Model Training
+- **Vision backbone**: MediaPipe Holistic for landmark extraction.
+- **Temporal model**: 3 LSTM layers + Dense classifier.
+- **Input shape**: `(10, 126)` sequence window.
+- **Prediction smoothing**:
+  - confidence threshold (`VOXSIGN_PRED_THRESHOLD`)
+  - duplicate cooldown (`VOXSIGN_PRED_COOLDOWN`)
+- **CV status feedback**:
+  - left/right hand detection status
+  - landmark count in current frame
 
-After the data has been collected and the dataset is complete, the user can proceed with the model training. In this step, the dataset is split into two subsets: 90% of the dataset is used for training and 10% for testing. The accuracy of testing using this 10% of the dataset will provide insight into the efficiency of the model.
+## Tech Stack
 
-For this particular project, the Neural Network is built using a Sequential model instance by passing three LSTM and two Densely-connected layers. The first four of these layers use the ReLU activation function with the last layer using the Softmax activation function. In the process of training, the Adam optimization algorithm is used to obtain optimal parameters for each layer.
-
-Once the Neural Network is compiled, one can proceed with the model training and testing. During this step, the user can provide the model with the training subset, associated labels, and the number of epochs. Depending on the size of the provided subset and the number of epochs the training process can take up to a few minutes. Following the training, one can assess the model by performing predictions using the testing subset and evaluating the accuracy of these predictions.
-
-## Real Time Predictions
-
-In this step, the Neural Network is ready to apply everything it has learned to the real-world problem. [MediaPipe Holistic](https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/holistic.md) pipeline processes every frame captured by a video camera and extracts hands' landmarks. Every new frame the script appends the landmarks to the previous ones until it reaches the length 10. Once 10 frames are processed and the corresponding landmarks are grouped together, the script converts the list with all the landmarks into an array and passes this array to the trained Neural Network so it can predict the sign of the user's hands. The prediction is then appended to the sentence list initialized earlier and the first word of the sentence is capitalized. Once the user has finished recording the sentence they can press "Enter" to perform a grammar check and correction using the language_tool_python library. If the user is not satisfied with the result they can press the "Spacebar" to reset the lists and start over.
-
-## Conclusion
-
-By combining advanced machine learning techniques and real-time hand tracking, Sign-Language-Translator empowers individuals to bridge the communication gap between sign language gestures and text, facilitating effective communication for the deaf and hearing-impaired.
+- Python, NumPy, TensorFlow/Keras
+- OpenCV, MediaPipe
+- FastAPI + Uvicorn
+- React + Vite
 
 ## Prerequisites
-* Python 3.6+
-* Java 8.0+
-* LanguageTool (pip install language-tool-python should take care of downloading LanguageTool)
+
+- Python 3.10+ recommended
+- Node.js 18+ recommended
+- Java 8+ (only if you enable full local LanguageTool grammar mode)
+
+## Configure Labels
+
+Edit `labels.json` to define your sign vocabulary:
+
+```json
+{
+  "actions": ["hello", "thanks", "yes", "no"]
+}
+```
+
+This is used by data collection and training scripts.
+
+Label tips:
+- Use lowercase words.
+- Use `_` instead of spaces (example: `thank_you`).
+- Keep labels gesture-specific and consistent across recordings.
+
+## Run (Manual)
+
+### Backend
+
+From `VoxSign` folder:
+
+- `pip install -r requirements.txt`
+- `python -m uvicorn backend_api:app --host 0.0.0.0 --port 8000`
+
+### Frontend
+
+From `VoxSign/frontend` folder:
+
+- `npm install`
+- `npm run dev`
+
+Open `http://localhost:5173`.
+
+If backend runs on another machine, create `frontend/.env`:
+
+- `VITE_API_BASE=http://<BACKEND_HOST>:8000`
+
+## One-Click Windows Workflow
+
+### Collect + Train + Run
+
+- Double click `collect_train_run.bat`
+
+This will:
+- collect dataset from webcam,
+- train model,
+- start backend and frontend.
+
+### Run Existing Model
+
+- Double click `run_all.bat`
+
+This starts backend + frontend using existing `my_model.keras`.
+
+## Dataset-Driven Training
+
+This project now uses a direct dataset-driven flow based on `labels.json`:
+
+- define labels in `labels.json`
+- collect data for those exact labels
+- train model on collected data
+- run realtime inference against the trained label set
+
+## API Endpoints
+
+- `GET /health` - health check
+- `POST /session` - create inference session
+- `POST /predict` - predict sign from uploaded frame
+- `POST /apply-grammar` - sentence grammar/post-processing stage
+- `POST /reset` - clear session state
+
+## Deployment Notes
+
+- Backend is deployable via `Procfile` using Uvicorn.
+- Frontend can be deployed as static build (`npm run build`) on any static host.
+- For production, configure CORS `allow_origins` to trusted frontend domains.
+
+## Current Scope
+
+The current implementation is optimized for **sign-to-text** translation from webcam gesture input. Speech/text to avatar-style sign synthesis can be added as a separate module in a future release.
