@@ -1,39 +1,35 @@
-import base64
 import os
 import string
 import uuid
 import time
 from typing import Dict, List, Optional
 
-import cv2
-import mediapipe as mp
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from tensorflow.keras.models import load_model
 
 from action_config import load_actions
-from my_functions import draw_landmarks, image_process, keypoint_extraction
 
+# --------------- Model loading ---------------
+import onnxruntime as ort
 
-PATH = os.path.join("data")
 actions = np.array(load_actions(default="a,b"))
-model = load_model("my_model.keras")
-holistic = mp.solutions.holistic.Holistic(
-    min_detection_confidence=0.75,
-    min_tracking_confidence=0.75,
-)
+ort_session = ort.InferenceSession("my_model.onnx")
+model_output_size = ort_session.get_outputs()[0].shape[-1]
+if len(actions) != model_output_size:
+    actions = actions[:model_output_size]
+INPUT_NAME = ort_session.get_inputs()[0].name
+OUTPUT_NAME = ort_session.get_outputs()[0].name
+print(f"[VoxSign] ONNX model loaded: {len(actions)} labels, output size {model_output_size}", flush=True)
+# ---------------------------------------------------------
+
 PREDICTION_CONFIDENCE_THRESHOLD = float(os.environ.get("VOXSIGN_PRED_THRESHOLD", "0.60"))
 PREDICTION_COOLDOWN_SECONDS = float(os.environ.get("VOXSIGN_PRED_COOLDOWN", "0.8"))
 PREDICTION_MARGIN_THRESHOLD = float(os.environ.get("VOXSIGN_MARGIN_THRESHOLD", "0.15"))
 PREDICTION_VOTE_WINDOW = int(os.environ.get("VOXSIGN_VOTE_WINDOW", "5"))
 PREDICTION_VOTE_MIN = int(os.environ.get("VOXSIGN_VOTE_MIN", "3"))
 MIN_LANDMARKS_FOR_INFERENCE = int(os.environ.get("VOXSIGN_MIN_LANDMARKS", "10"))
-
-model_output_size = int(model.output_shape[-1])
-if len(actions) != model_output_size:
-    actions = actions[:model_output_size]
 
 session_states: Dict[str, Dict[str, object]] = {}
 
@@ -67,23 +63,6 @@ def _merge_letters(sentence: List[str]) -> None:
         sentence.pop(-2)
 
 
-def _encode_image_b64(image: np.ndarray) -> str:
-    ok, encoded = cv2.imencode(".jpg", image)
-    if not ok:
-        raise ValueError("Could not encode preview image.")
-    return base64.b64encode(encoded.tobytes()).decode("utf-8")
-
-
-def _bbox_from_landmarks(hand_landmarks, width: int, height: int):
-    xs = [lm.x for lm in hand_landmarks.landmark]
-    ys = [lm.y for lm in hand_landmarks.landmark]
-    x1 = max(0, int(min(xs) * width))
-    y1 = max(0, int(min(ys) * height))
-    x2 = min(width - 1, int(max(xs) * width))
-    y2 = min(height - 1, int(max(ys) * height))
-    return x1, y1, x2, y2
-
-
 def _state_for(session_id: str) -> Dict[str, object]:
     if session_id not in session_states:
         session_states[session_id] = _new_state()
@@ -92,6 +71,12 @@ def _state_for(session_id: str) -> Dict[str, object]:
 
 class SessionPayload(BaseModel):
     session_id: str
+
+
+class PredictPayload(BaseModel):
+    session_id: str
+    landmarks: List[float]  # 126-dim vector: [left_hand_63, right_hand_63]
+    landmarks_count: int = 0
 
 
 app = FastAPI(title="VoxSign API")
@@ -108,6 +93,7 @@ app.add_middleware(
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
+
 @app.get("/meta")
 def meta() -> Dict[str, object]:
     return {"actions": actions.tolist()}
@@ -121,13 +107,8 @@ def create_session() -> Dict[str, str]:
 
 
 @app.post("/predict")
-async def predict(session_id: str = Form(...), file: UploadFile = File(...)) -> Dict[str, object]:
-    state = _state_for(session_id)
-    raw = await file.read()
-    array = np.frombuffer(raw, dtype=np.uint8)
-    frame_bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
-    if frame_bgr is None:
-        raise HTTPException(status_code=400, detail="Invalid image payload.")
+def predict(payload: PredictPayload) -> Dict[str, object]:
+    state = _state_for(payload.session_id)
 
     sentence: List[str] = state["sentence"]  # type: ignore[assignment]
     keypoints: List[np.ndarray] = state["keypoints"]  # type: ignore[assignment]
@@ -141,52 +122,20 @@ async def predict(session_id: str = Form(...), file: UploadFile = File(...)) -> 
     prediction_history: List[str] = state["prediction_history"]  # type: ignore[assignment]
     frame_index: int = state["frame_index"]  # type: ignore[assignment]
 
-    results = image_process(frame_bgr, holistic)
-    draw_landmarks(frame_bgr, results)
+    landmarks_count = payload.landmarks_count
+    kp = np.array(payload.landmarks, dtype=np.float32)
+    if kp.shape[0] != 126:
+        raise HTTPException(status_code=400, detail=f"Expected 126 landmarks, got {kp.shape[0]}")
 
-    frame_h, frame_w = frame_bgr.shape[:2]
-    left_hand_detected = results.left_hand_landmarks is not None
-    right_hand_detected = results.right_hand_landmarks is not None
-    landmarks_count = 0
-
-    if left_hand_detected:
-        landmarks_count += len(results.left_hand_landmarks.landmark)
-        x1, y1, x2, y2 = _bbox_from_landmarks(results.left_hand_landmarks, frame_w, frame_h)
-        cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(
-            frame_bgr,
-            "Left hand",
-            (x1, max(20, y1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA,
-        )
-
-    if right_hand_detected:
-        landmarks_count += len(results.right_hand_landmarks.landmark)
-        x1, y1, x2, y2 = _bbox_from_landmarks(results.right_hand_landmarks, frame_w, frame_h)
-        cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (255, 0, 0), 2)
-        cv2.putText(
-            frame_bgr,
-            "Right hand",
-            (x1, max(20, y1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (255, 0, 0),
-            2,
-            cv2.LINE_AA,
-        )
-
-    keypoints.append(keypoint_extraction(results))
+    keypoints.append(kp)
     frame_index += 1
     if len(keypoints) > 10:
         keypoints.pop(0)
 
     if len(keypoints) == 10 and landmarks_count >= MIN_LANDMARKS_FOR_INFERENCE:
-        model_input = np.array(keypoints)[np.newaxis, :, :]
-        prediction = model.predict(model_input, verbose=0)[0]
+        model_input = np.array(keypoints, dtype=np.float32)[np.newaxis, :, :]
+        prediction = ort_session.run([OUTPUT_NAME], {INPUT_NAME: model_input})[0][0]
+
         current_confidence = float(np.max(prediction))
         current_prediction = str(actions[int(np.argmax(prediction))])
         if len(prediction) > 1:
@@ -238,32 +187,14 @@ async def predict(session_id: str = Form(...), file: UploadFile = File(...)) -> 
     state["prediction_history"] = prediction_history
     state["frame_index"] = frame_index
 
-    display_text = grammar_result if grammar_result else " ".join(sentence)
-    cv2.putText(
-        frame_bgr,
-        display_text,
-        (20, 460),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-
     return {
         "sentence": " ".join(sentence),
         "grammar_result": grammar_result,
-        "preview_b64": _encode_image_b64(frame_bgr),
         "current_prediction": current_prediction,
         "confidence": round(current_confidence, 4),
         "stable_prediction": stable_prediction,
         "stable_confidence": round(stable_confidence, 4),
         "threshold": PREDICTION_CONFIDENCE_THRESHOLD,
-        "cv": {
-            "left_hand_detected": left_hand_detected,
-            "right_hand_detected": right_hand_detected,
-            "landmarks_count": landmarks_count,
-        },
     }
 
 
@@ -272,7 +203,6 @@ def apply_grammar(payload: SessionPayload) -> Dict[str, str]:
     state = _state_for(payload.session_id)
     sentence: List[str] = state["sentence"]  # type: ignore[assignment]
     text = " ".join(sentence).strip()
-    # Local fallback: return sentence directly (no network dependency).
     state["grammar_result"] = text
     return {"grammar_result": text}
 
