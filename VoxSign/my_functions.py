@@ -3,53 +3,44 @@ import cv2
 import numpy as np
 
 def draw_landmarks(image, results):
-    """
-    Draw the landmarks on the image.
-
-    Args:
-        image (numpy.ndarray): The input image.
-        results: The landmarks detected by Mediapipe.
-
-    Returns:
-        None
-    """
-    # Draw landmarks for left hand
-    mp.solutions.drawing_utils.draw_landmarks(image, results.left_hand_landmarks, mp.solutions.holistic.HAND_CONNECTIONS)
-    # Draw landmarks for right hand
-    mp.solutions.drawing_utils.draw_landmarks(image, results.right_hand_landmarks, mp.solutions.holistic.HAND_CONNECTIONS)
+    if hasattr(results, 'multi_hand_landmarks') and results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp.solutions.drawing_utils.draw_landmarks(
+                image, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS)
 
 def image_process(image, model):
-    """
-    Process the image and obtain sign landmarks.
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = model.process(image_rgb)
+    return results
 
-    Args:
-        image (numpy.ndarray): The input image.
-        model: The Mediapipe holistic object.
-
-    Returns:
-        results: The processed results containing sign landmarks.
-    """
-    # Use a temporary RGB frame for MediaPipe so the original image remains writable.
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    rgb_image.flags.writeable = False
-    # Process the image using the model
-    results = model.process(rgb_image)
+def hands_process(image, model):
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = model.process(image_rgb)
     return results
 
 def keypoint_extraction(results):
-    """
-    Extract the keypoints from the sign landmarks.
+    lh = np.zeros(63)
+    rh = np.zeros(63)
+    
+    if hasattr(results, 'multi_hand_landmarks') and results.multi_hand_landmarks:
+        for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
+            label = results.multi_handedness[i].classification[0].label
+            # FLIP X coordination to handle mirrored webcam
+            keypoints = np.array([[(1.0 - res.x), res.y, res.z] for res in hand_landmarks.landmark]).flatten()
+            
+            if label == 'Left':
+                lh = keypoints
+            else:
+                rh = keypoints
+                
+    # MediaPipe Holistic output.
+    if hasattr(results, 'left_hand_landmarks') and results.left_hand_landmarks:
+        lh = np.array(
+            [[1.0 - res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]
+        ).flatten()
+    if hasattr(results, 'right_hand_landmarks') and results.right_hand_landmarks:
+        rh = np.array(
+            [[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]
+        ).flatten()
 
-    Args:
-        results: The processed results containing sign landmarks.
-
-    Returns:
-        keypoints (numpy.ndarray): The extracted keypoints.
-    """
-    # Extract the keypoints for the left hand if present, otherwise set to zeros
-    lh = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(63)
-    # Extract the keypoints for the right hand if present, otherwise set to zeros
-    rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(63)
-    # Concatenate the keypoints for both hands
-    keypoints = np.concatenate([lh, rh])
-    return keypoints
+    return np.concatenate([lh, rh])

@@ -8,10 +8,9 @@ import mediapipe as mp
 from itertools import product
 from my_functions import *
 import keyboard
-from action_config import load_actions
 
-# Load actions from labels.json or env var.
-actions = np.array(load_actions(default="a,b"))
+# Define the actions (signs) that will be recorded and stored in the dataset
+actions = np.array(['a', 'b'])
 
 # Define the number of sequences and frames to be recorded for each action
 sequences = 30
