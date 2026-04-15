@@ -12,3 +12,16 @@ venv.bak/
 .vscode/
 *.swp
 *.swo
+
+# Data and model files (too large for git)
+data/
+ProcessedData_vivit/
+*.keras
+*.h5
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

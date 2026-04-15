@@ -15,7 +15,15 @@ def load_actions(default: str = "a,b") -> List[str]:
         try:
             with open(labels_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-            actions = payload.get("actions", [])
+
+            # Support both {"actions": [...]} and legacy raw list [...] formats.
+            if isinstance(payload, dict):
+                actions = payload.get("actions", [])
+            elif isinstance(payload, list):
+                actions = payload
+            else:
+                actions = []
+
             cleaned = [str(x).strip() for x in actions if str(x).strip()]
             if cleaned:
                 return cleaned

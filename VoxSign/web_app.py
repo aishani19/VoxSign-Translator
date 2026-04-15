@@ -1,203 +1,112 @@
 import os
+import json
 import string
-from typing import Dict, List, Optional, Tuple
-
 import cv2
 import gradio as gr
-import language_tool_python
 import mediapipe as mp
 import numpy as np
 from tensorflow.keras.models import load_model
 
-from my_functions import draw_landmarks, image_process, keypoint_extraction
+# 1. LOADING CORE ASSETS
+with open('labels.json', 'r') as f:
+    actions = np.array(json.load(f))
 
-
-PATH = os.path.join("data")
-actions = np.array(sorted(os.listdir(PATH)))
 model = load_model("my_model.keras")
-grammar_tool = None
-grammar_error = ""
-holistic = mp.solutions.holistic.Holistic(
-    min_detection_confidence=0.75,
-    min_tracking_confidence=0.75,
+
+# 2. AI MODELS
+hands = mp.solutions.hands.Hands(
+    static_image_mode=False,
+    max_num_hands=2,
+    min_detection_confidence=0.3,
+    min_tracking_confidence=0.3,
 )
 
+def keypoint_extraction(results):
+    lh = np.zeros(63)
+    rh = np.zeros(63)
+    if results.multi_hand_landmarks:
+        for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
+            label = results.multi_handedness[i].classification[0].label
+            # Mirror fix: 1.0 - x
+            kp = np.array([[(1.0 - res.x), res.y, res.z] for res in hand_landmarks.landmark]).flatten()
+            if label == 'Left': lh = kp
+            else: rh = kp
+    return np.concatenate([lh, rh])
 
-def _new_state() -> Dict[str, object]:
-    return {
-        "sentence": [],
-        "keypoints": [],
-        "last_prediction": None,
-        "grammar_result": "",
-    }
+def _new_state():
+    return {"sentence": [], "keypoints": [], "last_prediction": None}
 
+def process_stream(frame, state):
+    if state is None: state = _new_state()
+    if frame is None: return None, "", "Waiting for Camera...", state
 
-def _merge_letters(sentence: List[str]) -> None:
-    if len(sentence) < 2:
-        return
-
-    last = sentence[-1]
-    prev = sentence[-2]
-    alpha = set(string.ascii_lowercase + string.ascii_uppercase)
-    known_actions = set(actions.tolist()) | {x.capitalize() for x in actions.tolist()}
-
-    if last in alpha and (prev in alpha or prev not in known_actions):
-        sentence[-1] = (prev + last).capitalize()
-        sentence.pop(-2)
-
-
-def process_stream(
-    frame: Optional[np.ndarray], state: Optional[Dict[str, object]]
-) -> Tuple[Optional[np.ndarray], str, str, str, Dict[str, object]]:
-    if state is None:
-        state = _new_state()
-
-    if frame is None:
-        return None, "", "", "No frame received. Allow webcam access or use Upload Image.", state
-
-    sentence: List[str] = state["sentence"]  # type: ignore[assignment]
-    keypoints: List[np.ndarray] = state["keypoints"]  # type: ignore[assignment]
-    last_prediction: Optional[str] = state["last_prediction"]  # type: ignore[assignment]
-    grammar_result: str = state["grammar_result"]  # type: ignore[assignment]
+    sentence = state["sentence"]
+    keypoints = state["keypoints"]
+    last_pred = state["last_prediction"]
 
     try:
-        bgr_frame = cv2.cvtColor(frame.copy(), cv2.COLOR_RGB2BGR)
-        results = image_process(bgr_frame, holistic)
-        draw_landmarks(bgr_frame, results)
+        # Visibility Boost (CLAHE)
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        cl = cv2.createCLAHE(clipLimit=3.0).apply(l)
+        bgr_enhanced = cv2.cvtColor(cv2.merge((cl,a,b)), cv2.COLOR_LAB2BGR)
+        
+        # AI Detection
+        results = hands.process(cv2.cvtColor(bgr_enhanced, cv2.COLOR_BGR2RGB))
+        if results.multi_hand_landmarks:
+            for hl in results.multi_hand_landmarks:
+                mp.solutions.drawing_utils.draw_landmarks(bgr_enhanced, hl, mp.solutions.hands.HAND_CONNECTIONS)
+        
+        # Prediction Logic
         keypoints.append(keypoint_extraction(results))
-    except Exception as exc:
-        return None, " ".join(sentence), grammar_result, f"Frame processing error: {exc}", state
+        status = f"Buffer: {len(keypoints)}/6"
+        
+        if len(keypoints) == 6:
+            pred = model.predict(np.array(keypoints)[np.newaxis, :, :], verbose=0)[0]
+            keypoints.clear()
+            
+            # Bias Greetings
+            for g in ['Hi', 'Hello']:
+                if g in actions: pred[np.where(actions==g)[0][0]] *= 1.2
 
-    if len(keypoints) == 10:
-        model_input = np.array(keypoints)[np.newaxis, :, :]
-        prediction = model.predict(model_input, verbose=0)[0]
-        keypoints.clear()
-        if np.max(prediction) > 0.9:
-            predicted_action = actions[int(np.argmax(prediction))]
-            if predicted_action != last_prediction:
-                sentence.append(predicted_action)
-                last_prediction = predicted_action
+            prob = float(np.max(pred))
+            word = actions[np.argmax(pred)]
+            status = f"Last Sign: {word} ({prob*100:.0f}%)"
+            
+            if prob > 0.35: # Always predict if reasonably sure
+                if word != last_pred:
+                    sentence.append(word)
+                    state["last_prediction"] = word
 
-    if len(sentence) > 7:
-        sentence[:] = sentence[-7:]
-    if sentence:
-        sentence[0] = sentence[0].capitalize()
-    _merge_letters(sentence)
+        if len(sentence) > 5: sentence.pop(0)
+        
+        # Final UI data
+        state["sentence"] = sentence
+        state["keypoints"] = keypoints
+        
+        res_frame = cv2.cvtColor(bgr_enhanced, cv2.COLOR_BGR2RGB)
+        return res_frame, " ".join(sentence), status, state
 
-    display_text = grammar_result if grammar_result else " ".join(sentence)
-    cv2.putText(
-        bgr_frame,
-        display_text,
-        (20, 460),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
+    except Exception as e:
+        return frame, " ".join(sentence), f"Error: {e}", state
 
-    state["sentence"] = sentence
-    state["keypoints"] = keypoints
-    state["last_prediction"] = last_prediction
-    state["grammar_result"] = grammar_result
-
-    out_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-    return out_frame, " ".join(sentence), grammar_result, "Frame processed.", state
-
-
-def apply_grammar(state: Optional[Dict[str, object]]) -> Tuple[str, Dict[str, object]]:
-    global grammar_tool, grammar_error
-    if state is None:
-        state = _new_state()
-    sentence: List[str] = state["sentence"]  # type: ignore[assignment]
-    text = " ".join(sentence).strip()
-    if not text:
-        state["grammar_result"] = ""
-        return "", state
-
-    # Keep grammar optional to avoid blocking the app on network-restricted machines.
-    if os.environ.get("VOXSIGN_ENABLE_GRAMMAR", "0") != "1":
-        state["grammar_result"] = text
-        return state["grammar_result"], state
-
-    if grammar_tool is None and not grammar_error:
-        try:
-            grammar_tool = language_tool_python.LanguageTool("en-UK")
-        except Exception as exc:
-            grammar_error = f"Grammar service unavailable: {exc}"
-
-    if grammar_tool is None:
-        state["grammar_result"] = grammar_error or "Grammar service unavailable."
-    else:
-        state["grammar_result"] = grammar_tool.correct(text)
-    return state["grammar_result"], state
-
-
-def reset_all() -> Tuple[str, str, Dict[str, object]]:
-    state = _new_state()
-    return "", "", state
-
-
-with gr.Blocks(title="VoxSign Translator (Web)") as app:
-    gr.Markdown("# VoxSign Translator (Browser)")
-    gr.Markdown(
-        "Allow camera access, sign in front of webcam, click **Predict This Frame**. "
-        "Grammar button currently returns the same text unless `VOXSIGN_ENABLE_GRAMMAR=1` is set."
-    )
-
+# 3. GRADIO UI
+with gr.Blocks(title="VoxSign Final") as app:
+    gr.Markdown("# 🚀 VoxSign Pro: 76-Sign Ultimate Translator")
     state = gr.State(_new_state())
-
+    
     with gr.Row():
-        webcam = gr.Image(
-            sources="webcam",
-            type="numpy",
-            label="Webcam Input",
-        )
-        preview = gr.Image(type="numpy", label="Prediction Preview")
+        cam = gr.Image(sources="webcam", type="numpy", label="Webcam")
+        out = gr.Image(type="numpy", label="AI Output")
+    
+    text = gr.Textbox(label="Detected Signs", interactive=False, text_align="center")
+    stat = gr.Textbox(label="Status", interactive=False)
+    btn_clear = gr.Button("Clear History")
 
-    upload_image = gr.Image(type="numpy", label="Upload Image (fallback if webcam blocked)")
-    sentence_box = gr.Textbox(label="Predicted Sentence", interactive=False)
-    grammar_box = gr.Textbox(label="Grammar Corrected Sentence", interactive=False)
-    status_box = gr.Textbox(label="Status", interactive=False)
-
-    with gr.Row():
-        predict_btn = gr.Button("Predict This Frame")
-        grammar_btn = gr.Button("Apply Grammar")
-        reset_btn = gr.Button("Reset")
-
-    webcam.change(
-        fn=process_stream,
-        inputs=[webcam, state],
-        outputs=[preview, sentence_box, grammar_box, status_box, state],
-    )
-    webcam.stream(
-        fn=process_stream,
-        inputs=[webcam, state],
-        outputs=[preview, sentence_box, grammar_box, status_box, state],
-        stream_every=0.2,
-    )
-    predict_btn.click(
-        fn=process_stream,
-        inputs=[webcam, state],
-        outputs=[preview, sentence_box, grammar_box, status_box, state],
-    )
-    upload_image.change(
-        fn=process_stream,
-        inputs=[upload_image, state],
-        outputs=[preview, sentence_box, grammar_box, status_box, state],
-    )
-    grammar_btn.click(fn=apply_grammar, inputs=[state], outputs=[grammar_box, state])
-    reset_btn.click(
-        fn=reset_all,
-        inputs=None,
-        outputs=[sentence_box, grammar_box, state],
-    ).then(
-        fn=lambda: "Reset done.",
-        inputs=None,
-        outputs=[status_box],
-    )
-
+    # The Engine
+    cam.stream(fn=process_stream, inputs=[cam, state], outputs=[out, text, stat, state], stream_every=0.1)
+    btn_clear.click(fn=lambda: ("", "History Cleared", _new_state()), outputs=[text, stat, state])
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "7860"))
-    app.launch(server_name="0.0.0.0", server_port=port, show_error=True)
+    app.launch(server_name="0.0.0.0", server_port=7860, show_error=True)

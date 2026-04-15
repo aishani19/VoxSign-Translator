@@ -1,69 +1,134 @@
-# %%
-
-# Import necessary libraries
-import numpy as np
+import json
 import os
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.utils import to_categorical
-from itertools import product
-from sklearn import metrics
+import random
 
+import numpy as np
+import tensorflow as tf
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.layers import (BatchNormalization, Bidirectional, Dense,
+                                     Dropout, Input, LSTM)
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from action_config import load_actions
+from tensorflow.keras.utils import to_categorical
 
 # Set the path to the data directory
 PATH = os.path.join('data')
 
-# Use configured actions if available and present in data/.
-configured_actions = [a for a in load_actions(default="a,b") if os.path.isdir(os.path.join(PATH, a))]
-actions = np.array(configured_actions if configured_actions else sorted(os.listdir(PATH)))
+# Load actions from labels.json
+labels_path = 'labels.json'
+if os.path.exists(labels_path):
+    with open(labels_path, 'r') as f:
+        payload = json.load(f)
+        if isinstance(payload, dict):
+            actions = np.array(payload.get("actions", []))
+        else:
+            actions = np.array(payload)
+else:
+    actions = np.array(sorted([d for d in os.listdir(PATH) if os.path.isdir(os.path.join(PATH, d))]))
 
-# Define the number of sequences and frames
-sequences = 30
+seed = int(os.environ.get("VOXSIGN_SEED", "42"))
+np.random.seed(seed)
+random.seed(seed)
+tf.random.set_seed(seed)
+
+print(f"Training on {len(actions)} actions")
+
 frames = 10
-
-# Create a label map to map each action label to a numeric value
-label_map = {label:num for num, label in enumerate(actions)}
-
-# Initialize empty lists to store landmarks and labels
 landmarks, labels = [], []
 
-# Iterate over actions and sequences to load landmarks and corresponding labels
-for action, sequence in product(actions, range(sequences)):
-    temp = []
-    for frame in range(frames):
-        npy = np.load(os.path.join(PATH, action, str(sequence), str(frame) + '.npy'))
-        temp.append(npy)
-    landmarks.append(temp)
-    labels.append(label_map[action])
+for idx, action in enumerate(actions):
+    action_path = os.path.join(PATH, action)
+    if not os.path.exists(action_path):
+        print(f"Warning: Skipping {action}, path not found")
+        continue
+    
+    # Find all sequence directories
+    sequences = [d for d in os.listdir(action_path) if os.path.isdir(os.path.join(action_path, d))]
+    
+    valid_sequences_count = 0
+    for seq in sequences:
+        seq_path = os.path.join(action_path, seq)
+        # Check if it has all 10 frames
+        if len([f for f in os.listdir(seq_path) if f.endswith('.npy')]) >= frames:
+            temp = []
+            for frame in range(frames):
+                npy = np.load(os.path.join(seq_path, f"{frame}.npy"))
+                temp.append(npy)
+            landmarks.append(temp)
+            labels.append(idx)
+            valid_sequences_count += 1
+    print(f"  Loaded {valid_sequences_count} sequences for {action}")
 
-# Convert landmarks and labels to numpy arrays
-X, Y = np.array(landmarks), to_categorical(labels).astype(int)
+X = np.array(landmarks, dtype=np.float32)
+Y = to_categorical(labels).astype(int)
 
-# Split the data into training and testing sets
+print(f"Total samples: {len(X)}")
+
+# Sequence-level normalization helps reduce signer/camera variance.
+mean = np.mean(X, axis=(1, 2), keepdims=True)
+std = np.std(X, axis=(1, 2), keepdims=True) + 1e-6
+X = (X - mean) / std
+
+# Split the data
 X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.10, random_state=34, stratify=Y)
 
-# Define the model architecture
-model = Sequential()
-model.add(LSTM(32, return_sequences=True, activation='relu', input_shape=(10,126)))
-model.add(LSTM(64, return_sequences=True, activation='relu'))
-model.add(LSTM(32, return_sequences=False, activation='relu'))
-model.add(Dense(32, activation='relu'))
-model.add(Dense(actions.shape[0], activation='softmax'))
+# Model
+model = Sequential(
+    [
+        Input(shape=(10, 126)),
+        Bidirectional(LSTM(128, return_sequences=True)),
+        BatchNormalization(),
+        Dropout(0.35),
+        Bidirectional(LSTM(96, return_sequences=False)),
+        BatchNormalization(),
+        Dropout(0.35),
+        Dense(256, activation="relu"),
+        Dropout(0.30),
+        Dense(128, activation="relu"),
+        Dense(len(actions), activation="softmax"),
+    ]
+)
 
-# Compile the model with Adam optimizer and categorical cross-entropy loss
-model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
-# Train the model
-model.fit(X_train, Y_train, epochs=100)
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+    loss="categorical_crossentropy",
+    metrics=["categorical_accuracy", tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top3_acc")],
+)
 
-# Save the trained model
+epochs = int(os.environ.get("VOXSIGN_EPOCHS", "80"))
+callbacks = [
+    EarlyStopping(monitor="val_top3_acc", patience=18, mode="max", restore_best_weights=True),
+    ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6),
+    ModelCheckpoint("my_model.keras", monitor="val_top3_acc", mode="max", save_best_only=True),
+]
+
+y_train_labels = np.argmax(Y_train, axis=1)
+class_weights_values = compute_class_weight(
+    class_weight="balanced",
+    classes=np.arange(len(actions)),
+    y=y_train_labels,
+)
+class_weights = {i: float(w) for i, w in enumerate(class_weights_values)}
+
+model.fit(
+    X_train,
+    Y_train,
+    validation_data=(X_test, Y_test),
+    epochs=epochs,
+    callbacks=callbacks,
+    class_weight=class_weights,
+    batch_size=32,
+)
+
 model.save('my_model.keras')
 
-# Make predictions on the test set
-predictions = np.argmax(model.predict(X_test), axis=1)
-# Get the true labels from the test set
+# Eval
+probabilities = model.predict(X_test)
+predictions = np.argmax(probabilities, axis=1)
 test_labels = np.argmax(Y_test, axis=1)
-
-# Calculate the accuracy of the predictions
 accuracy = metrics.accuracy_score(test_labels, predictions)
+top3 = metrics.top_k_accuracy_score(test_labels, probabilities, k=3, labels=np.arange(len(actions)))
+print(f"Test Accuracy (Top-1): {accuracy}")
+print(f"Test Accuracy (Top-3): {top3}")

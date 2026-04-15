@@ -1,6 +1,6 @@
 # VoxSign Translator
 
-VoxSign is an intelligent sign language translation project that converts hand gestures into text in real time using computer vision and deep learning. It is built as an end-to-end pipeline with a React frontend and FastAPI backend, designed for accessibility-focused communication workflows.
+VoxSign is an intelligent sign language translation project that converts hand gestures into text in real time using computer vision and deep learning. It supports **76 Indian Sign Language (ISL) words** using an LSTM-based neural network trained on the [Indian Sign Language Words with Landmarks](https://www.kaggle.com/datasets/kaushikyh/indian-sign-language-words-with-landmarks) dataset.
 
 ## Project Vision
 
@@ -11,138 +11,197 @@ VoxSign is an intelligent sign language translation project that converts hand g
 
 ## Core Features
 
-- User-friendly data collection for custom sign datasets.
-- LSTM + Dense neural architecture for gesture sequence classification.
-- Real-time webcam inference with live prediction smoothing.
-- MediaPipe Holistic-based landmark extraction for robust hand tracking.
-- Sentence building with optional grammar correction stage.
+- **76 ISL word recognition** from webcam gestures in real time.
+- Video dataset preprocessing pipeline (`preprocess_videos.py`) for training from raw video files.
+- Bidirectional LSTM + Dense neural architecture for gesture sequence classification.
+- Real-time webcam inference with prediction smoothing and voting.
+- MediaPipe-based hand landmark extraction (126 features: 21 points x 2 hands x xyz).
+- Sentence building with optional grammar correction.
 - React frontend + FastAPI backend for deployable web usage.
+- Gradio-based web app (`web_app.py`) as an alternative UI.
+- Docker support for containerized deployment.
+
+## Supported Signs (76 ISL Words)
+
+afternoon, animal, bad, beautiful, big, bird, blind, cat, cheap, clothing, cold, cow, curved, deaf, dog, dress, dry, evening, expensive, famous, fast, female, fish, flat, friday, good, happy, hat, healthy, horse, hot, hour, light, long, loose, loud, minute, monday, month, morning, mouse, narrow, new, night, old, pant, pocket, quiet, sad, saturday, second, shirt, shoes, short, sick, skirt, slow, small, suit, sunday, tall, thursday, time, today, tomorrow, tuesday, t_shirt, ugly, warm, wednesday, week, wet, wide, year, yesterday, young
 
 ## End-to-End Pipeline
 
-1. **Data Collection** (`data_collection.py`)
-   - Record gesture sequences from webcam.
-   - Extract hand landmarks (126 features per frame: 21 points x 2 hands x xyz).
-   - Store training samples under `data/<label>/<sequence>/<frame>.npy`.
+### 1. Download Dataset
 
-2. **Model Training** (`model.py`)
-   - Load all labeled landmark sequences.
-   - Train a Sequential LSTM + Dense model.
-   - Save trained model to `my_model.keras`.
+Download the ISL video dataset from Kaggle:
 
-3. **Real-Time Prediction** (`backend_api.py` + `frontend/`)
-   - Capture live webcam frames from React.
-   - Send frames to FastAPI prediction endpoint.
-   - Run MediaPipe + model inference and return:
-     - predicted label
-     - confidence
-     - visualization frame
-     - sentence output
+```bash
+pip install kaggle
+kaggle datasets download kaushikyh/indian-sign-language-words-with-landmarks -p ProcessedData_vivit --unzip
+```
+
+This creates `ProcessedData_vivit/<label>/<video>.MOV` with 76 sign categories.
+
+### 2. Preprocess Videos (`preprocess_videos.py`)
+
+Extract hand landmarks from video files into training-ready `.npy` sequences:
+
+```bash
+python preprocess_videos.py --input ProcessedData_vivit --output data --frames 10
+```
+
+This creates `data/<label>/<sequence>/<frame>.npy` files.
+
+### 3. Train Model (`model.py`)
+
+Train the Bidirectional LSTM model on extracted landmarks:
+
+```bash
+python model.py
+```
+
+- Loads labels from `labels.json` (76 ISL words).
+- 90/10 train/test split with stratification.
+- EarlyStopping and ReduceLROnPlateau callbacks.
+- Saves best model to `my_model.keras`.
+
+### 4. Real-Time Prediction
+
+**Option A: React + FastAPI** (recommended for deployment)
+
+```bash
+# Backend
+python -m uvicorn backend_api:app --host 0.0.0.0 --port 8000
+
+# Frontend (in VoxSign/frontend/)
+npm install && npm run dev
+```
+
+Open `http://localhost:5173`.
+
+**Option B: Gradio Web App** (quick demo)
+
+```bash
+python web_app.py
+```
+
+Open `http://localhost:7860`.
 
 ## Model and CV Details
 
-- **Vision backbone**: MediaPipe Holistic for landmark extraction.
-- **Temporal model**: 3 LSTM layers + Dense classifier.
-- **Input shape**: `(10, 126)` sequence window.
+- **Vision backbone**: MediaPipe Hands for landmark extraction.
+- **Temporal model**: 2 Bidirectional LSTM layers + Dense classifier with BatchNormalization and Dropout.
+- **Input shape**: `(10, 126)` sequence window (10 frames, 126 landmark features).
+- **Training**: Adam optimizer, categorical crossentropy, class-weighted, EarlyStopping.
 - **Prediction smoothing**:
-  - confidence threshold (`VOXSIGN_PRED_THRESHOLD`)
-  - duplicate cooldown (`VOXSIGN_PRED_COOLDOWN`)
-- **CV status feedback**:
-  - left/right hand detection status
-  - landmark count in current frame
+  - Confidence threshold (`VOXSIGN_PRED_THRESHOLD`, default 0.60)
+  - Duplicate cooldown (`VOXSIGN_PRED_COOLDOWN`, default 0.8s)
+  - Voting window for stable predictions
 
 ## Tech Stack
 
-- Python, NumPy, TensorFlow/Keras
+- Python 3.10+, NumPy, TensorFlow/Keras
 - OpenCV, MediaPipe
-- FastAPI + Uvicorn
-- React + Vite
+- FastAPI + Uvicorn (backend API)
+- React + Vite (frontend)
+- Gradio (alternative web UI)
+- Docker (containerized deployment)
 
-## Prerequisites
+## Quick Start
 
-- Python 3.10+ recommended
-- Node.js 18+ recommended
-- Java 8+ (only if you enable full local LanguageTool grammar mode)
+### Prerequisites
 
-## Configure Labels
+- Python 3.10+
+- Node.js 18+
+- A trained model file `my_model.keras` (train with `model.py` or use pre-trained)
 
-Edit `labels.json` to define your sign vocabulary:
+### Install Dependencies
 
-```json
-{
-  "actions": ["hello", "thanks", "yes", "no"]
-}
+```bash
+cd VoxSign
+pip install -r requirements.txt
+cd frontend && npm install && cd ..
 ```
 
-This is used by data collection and training scripts.
+### Run Backend + Frontend
 
-Label tips:
-- Use lowercase words.
-- Use `_` instead of spaces (example: `thank_you`).
-- Keep labels gesture-specific and consistent across recordings.
+```bash
+# Terminal 1: Backend
+python -m uvicorn backend_api:app --host 0.0.0.0 --port 8000
 
-## Run (Manual)
-
-### Backend
-
-From `VoxSign` folder:
-
-- `pip install -r requirements.txt`
-- `python -m uvicorn backend_api:app --host 0.0.0.0 --port 8000`
-
-### Frontend
-
-From `VoxSign/frontend` folder:
-
-- `npm install`
-- `npm run dev`
+# Terminal 2: Frontend
+cd frontend && npm run dev
+```
 
 Open `http://localhost:5173`.
 
 If backend runs on another machine, create `frontend/.env`:
 
-- `VITE_API_BASE=http://<BACKEND_HOST>:8000`
+```
+VITE_API_BASE=http://<BACKEND_HOST>:8000
+```
 
-## One-Click Windows Workflow
+## Docker Deployment
 
-### Collect + Train + Run
+Build and run:
 
-- Double click `collect_train_run.bat`
+```bash
+cd VoxSign
+docker build -t voxsign .
+docker run -p 7860:7860 voxsign
+```
 
-This will:
-- collect dataset from webcam,
-- train model,
-- start backend and frontend.
+This runs the Gradio web app on port 7860.
 
-### Run Existing Model
+## Project Structure
 
-- Double click `run_all.bat`
-
-This starts backend + frontend using existing `my_model.keras`.
-
-## Dataset-Driven Training
-
-This project now uses a direct dataset-driven flow based on `labels.json`:
-
-- define labels in `labels.json`
-- collect data for those exact labels
-- train model on collected data
-- run realtime inference against the trained label set
+```
+VoxSign/
+  backend_api.py          # FastAPI backend with prediction endpoints
+  web_app.py              # Gradio web app (alternative UI)
+  model.py                # Model training script
+  preprocess_videos.py    # Video-to-landmark extraction pipeline
+  data_collection.py      # Live webcam data collection
+  main.py                 # Standalone real-time prediction (desktop)
+  my_functions.py         # Shared MediaPipe utility functions
+  action_config.py        # Label loading configuration
+  labels.json             # 76 ISL word labels
+  label_aliases.json      # Label alias mappings
+  requirements.txt        # Python dependencies
+  Dockerfile              # Container deployment config
+  Procfile                # Render/Heroku deployment
+  my_model.keras          # Trained model (not in git, train or download)
+  ProcessedData_vivit/    # Raw video dataset (not in git, download from Kaggle)
+  data/                   # Extracted landmark sequences (not in git)
+  frontend/               # React frontend application
+    src/
+    package.json
+    vite.config.js
+    index.html
+```
 
 ## API Endpoints
 
 - `GET /health` - health check
+- `GET /meta` - list available sign labels
 - `POST /session` - create inference session
 - `POST /predict` - predict sign from uploaded frame
-- `POST /apply-grammar` - sentence grammar/post-processing stage
+- `POST /apply-grammar` - sentence grammar/post-processing
 - `POST /reset` - clear session state
 
-## Deployment Notes
+## Environment Variables
 
-- Backend is deployable via `Procfile` using Uvicorn.
-- Frontend can be deployed as static build (`npm run build`) on any static host.
-- For production, configure CORS `allow_origins` to trusted frontend domains.
+| Variable | Default | Description |
+|---|---|---|
+| `VOXSIGN_PRED_THRESHOLD` | `0.60` | Minimum confidence for predictions |
+| `VOXSIGN_PRED_COOLDOWN` | `0.8` | Seconds between duplicate predictions |
+| `VOXSIGN_MARGIN_THRESHOLD` | `0.15` | Min margin between top-2 predictions |
+| `VOXSIGN_VOTE_WINDOW` | `5` | Number of recent predictions for voting |
+| `VOXSIGN_VOTE_MIN` | `3` | Min votes needed for stable prediction |
+| `VOXSIGN_MIN_LANDMARKS` | `10` | Min landmarks required for inference |
+| `VOXSIGN_SEED` | `42` | Random seed for reproducible training |
+| `VOXSIGN_EPOCHS` | `80` | Training epochs |
 
-## Current Scope
+## Dataset
 
-The current implementation is optimized for **sign-to-text** translation from webcam gesture input. Speech/text to avatar-style sign synthesis can be added as a separate module in a future release.
+This project uses the [Indian Sign Language Words with Landmarks](https://www.kaggle.com/datasets/kaushikyh/indian-sign-language-words-with-landmarks) dataset from Kaggle, containing 1166 video recordings across 76 ISL word categories.
+
+## License
+
+CC-BY-SA-4.0 (dataset), project code is open source.

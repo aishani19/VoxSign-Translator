@@ -1,0 +1,25 @@
+# Data and Assets
+data/
+ProcessedData_vivit/
+data_active/
+data_review/
+*.task
+
+# Model files (too large for git)
+*.keras
+*.h5
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+.env
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
