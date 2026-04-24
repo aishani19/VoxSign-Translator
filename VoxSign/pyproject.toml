@@ -1,0 +1,14 @@
+[project]
+name = "voxsign-backend"
+version = "2.1.0"
+description = "VoxSign Sign Language Translator - Lightweight ONNX Backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard]==0.115.2",
+    "fastapi-cli>=0.0.5",
+    "numpy==1.26.4",
+    "onnxruntime>=1.17.0",
+    "python-multipart>=0.0.18",
+    "uvicorn[standard]==0.30.6",
+    "httptools>=0.5.0",
+]
