@@ -1,4 +1,5 @@
 🚀 VoxSign Translator
+
 🧠 Real-Time Sign Language to Text using AI
 
 VoxSign is an intelligent sign language translation system that converts hand gestures into meaningful text in real time using Computer Vision + Deep Learning.
@@ -100,28 +101,40 @@ npm install
 cd ..
 
 📌 2. Download Dataset
+
 pip install kaggle
 kaggle datasets download kaushikyh/indian-sign-language-words-with-landmarks -p ProcessedData_vivit --unzip
 
 📌 3. Preprocess Data
+
 python preprocess_videos.py --input ProcessedData_vivit --output data --frames 10
 
-📌 5. Train Model
+📌 4. Train Model
+
 python model.py
 
 🚀 Run the Project
+
 🔹 Option 1: Full Web App (Recommended)
+
 Backend
+
 python -m uvicorn backend_api:app --host 0.0.0.0 --port 8000
+
 Frontend
+
 cd frontendnpm run dev
+
 👉 Open: http://localhost:5173
 
 🔹 Option 2: Gradio Demo
+
 python web_app.py
+
 👉 Open: http://localhost:7860
 
 🐳 Docker Deployment
+
 docker build -t voxsign .docker run -p 7860:7860 voxsign
 
 📂 Project Structure
@@ -166,6 +179,7 @@ POST /reset → Reset session
 
 
 📊 Dataset
+
 Indian Sign Language Words with Landmarks (Kaggle)
 
 
@@ -193,6 +207,7 @@ Real-time speech output
 
 
 ❤️ Contribution
+
 Contributions are welcome!
-Feel free to fork, improve, and submit a PR 🚀
+
 
