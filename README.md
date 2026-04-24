@@ -124,8 +124,10 @@ python web_app.py
 🐳 Docker Deployment
 docker build -t voxsign .docker run -p 7860:7860 voxsign
 
+📂 Project Structure
 
-<img width="877" height="540" alt="image" src="https://github.com/user-attachments/assets/c200924e-dd5a-4772-83b8-6bc94f5a6288" />
+<img width="776" height="428" alt="image" src="https://github.com/user-attachments/assets/3fe26e77-1a37-4224-a77f-2593b355269a" />
+
 
 
 🔌 API Endpoints
