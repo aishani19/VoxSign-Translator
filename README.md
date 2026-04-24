@@ -8,29 +8,50 @@ Make communication accessible for the hearing & speech impaired
 Combine Computer Vision + NLP-style sentence correction
 Build a real-time, deployable web-based system
 Create an end-to-end AI pipeline from gesture → text → sentence
+
 ✨ Key Features
 
 ✅ Real-time ISL gesture recognition (76 words)
+
 ✅ Bidirectional LSTM model for sequence learning
+
 ✅ MediaPipe-based hand landmark extraction (126 features)
+
 ✅ Smart prediction smoothing & voting system
+
 ✅ Sentence formation + grammar correction
+
 ✅ React + FastAPI web app (production-ready)
+
 ✅ Gradio demo UI for quick testing
+
 ✅ Docker support for easy deployment
 
+
 🧠 How It Works (Pipeline)
+
 Video Input → Hand Detection → Landmark Extraction → LSTM Model → Prediction → Sentence Formation
+
 📊 Model Details
+
 📌 Input Shape: (10 frames, 126 features)
+
 📌 Architecture:
+
 Bidirectional LSTM ×2
+
 Dense Layers
+
 Batch Normalization + Dropout
+
 📌 Optimizer: Adam
+
 📌 Loss: Categorical Crossentropy
+
 📌 Training: EarlyStopping + LR Scheduler
+
 🖐️ Supported Signs (76 ISL Words)
+
 
 Includes words like:
 hello, good, bad, happy, sad, morning, night, dog, cat, fast, slow, today, tomorrow, monday...
